@@ -47,7 +47,7 @@ orbs:
 
   build:
     orbs:
-      node: circleci/slack@4.2.0
+      slack: circleci/slack@4.2.0
     jobs:
       build_check_install:
         parameters:
