@@ -1,150 +1,155 @@
 version: 2.1
-orbs:
-  slack: circleci/slack@4.2.0
 
 parameters:
   docker-image:
     type: string
     default: "rocker/tidyverse:3.6.3"
 
-jobs:
+orbs:
+  slack: circleci/slack@4.2.0
+  validation:
+    jobs:
+      version_validation:
+        docker:
+          - image: cimg/base:2020.01
+        steps:
+          - checkout
+          - run:
+              name: "Check version in NEWS.md and DESCRIPTION"
+              command: |
+                DESC_VERSION=$(awk -F: '/Version:/{gsub(/[ ]+/,"") ; print $2}' DESCRIPTION)
+                NEWS_VERSION=$(awk '/^#/{print $3; exit}' NEWS.md)
+                echo "NEWS.md version: $NEWS_VERSION"
+                echo "DESCRIPTION version: $DESC_VERSION"
+                if (test $DESC_VERSION = $NEWS_VERSION ); then
+                    echo "NEWS.md and DESCRIPTION have the same version"
+                else
+                    echo "NEWS.md and DESCRIPTION have different versions"
+                    exit 1
+                fi
+      roxygen:
+        docker:
+          - image: << pipeline.parameters.docker-image >>
+        steps:
+          - checkout
+          - run:
+              name: "check if manuals are upto date with roxygen comments"
+              command: |
+                R -e "roxygen2::roxygenize('.', roclets = c('rd', 'collate', 'namespace'))"
+                if [[ -z $(git status -s) ]]
+                then
+                  echo "manuals are not upto date with roxygen comments"
+                  echo "please rerun roxygen2::roxygenize('.', roclets = c('rd', 'collate', 'namespace'))"
+                  set -o errexit
+                else
+                  echo "manuals are upto date with roxygen comments"
+                fi
 
-  version_validation:
-    docker:
-      - image: cimg/base:2020.01
-    steps:
-      - checkout
-      - run:
-          name: "Check version in NEWS.md and DESCRIPTION"
-          command: |
-            DESC_VERSION=$(awk -F: '/Version:/{gsub(/[ ]+/,"") ; print $2}' DESCRIPTION)
-            NEWS_VERSION=$(awk '/^#/{print $3; exit}' NEWS.md)
-            echo "NEWS.md version: $NEWS_VERSION"
-            echo "DESCRIPTION version: $DESC_VERSION"
-            if (test $DESC_VERSION = $NEWS_VERSION ); then
-                echo "NEWS.md and DESCRIPTION have the same version"
-            else
-                echo "NEWS.md and DESCRIPTION have different versions"
-                exit 1
-            fi
 
+  build:
+    orbs:
+      node: circleci/slack@4.2.0
+    jobs:
+      build_check_install:
+        docker:
+          - image: << pipeline.parameters.docker-image >>
+        steps:
+          - checkout
+          - run:
+              name: "Build R package"
+              command: |
+                R CMD build .
+                echo "export PKG=$(echo *.tar.gz)" >> $BASH_ENV
+          - run:
+              name: "Check R package"
+              command: |
+                R CMD check --no-manual ${PKG}
+                result=$(tail -1 ${CIRCLE_PROJECT_REPONAME}.Rcheck/00check.log)
+                [[ $result = Status:* ]] || echo "could not get Status line"; set -o errexit
+                [[ $result = *"Error"* ]] && echo "checks result in errors"; set -o errexit
+          - slack/notify:
+              channel: nots
+              event: fail
+              template: basic_fail_1
+          - run:
+              name: "Install R package"
+              command: R CMD INSTALL ${PKG}
+          - run:
+              name: "Prepare artifacts"
+              command: mv ${CIRCLE_PROJECT_REPONAME}.Rcheck rpackage.Rcheck
+          - store_artifacts:
+              path: "rpackage.Rcheck/00check.log"
+              destination: 00check.log
+          - store_test_results:
+              path: "rpackage.Rcheck/tests"
+          - persist_to_workspace:
+              root: ./
+              paths:
+                - "*.tar.gz"
+      pkgdown_build:
+        docker:
+          - image: << pipeline.parameters.docker-image >>
+        steps:
+          - checkout
+          - run:
+              name: "create pkgdown website"
+              command: R -e 'pkgdown::build_site(".", devel = FALSE)'
+          - store_artifacts:
+              path: ./docs
+              destination: pkgdown
+          - persist_to_workspace:
+              root: ./
+              paths: docs
 
-  build_check_install:
-    docker:
-      - image: << pipeline.parameters.docker-image >>
-    steps:
-      - checkout
-      - run:
-          name: "Build R package"
-          command: |
-            R CMD build .
-            echo "export PKG=$(echo *.tar.gz)" >> $BASH_ENV
-      - run:
-          name: "Check R package"
-          command: |
-            R CMD check --no-manual ${PKG}
-            result=$(tail -1 ${CIRCLE_PROJECT_REPONAME}.Rcheck/00check.log)
-            [[ $result = Status:* ]] || echo "could not get Status line"; set -o errexit
-            [[ $result = *"Error"* ]] && echo "checks result in errors"; set -o errexit
-      - slack/notify:
-          channel: nots
-          event: fail
-          template: basic_fail_1
-      - run:
-          name: "Install R package"
-          command: R CMD INSTALL ${PKG}
-      - run:
-          name: "Prepare artifacts"
-          command: mv ${CIRCLE_PROJECT_REPONAME}.Rcheck rpackage.Rcheck
-      - store_artifacts:
-          path: "rpackage.Rcheck/00check.log"
-          destination: 00check.log
-      - store_test_results:
-          path: "rpackage.Rcheck/tests"
-      - persist_to_workspace:
-          root: ./
-          paths:
-            - "*.tar.gz"
+  deploy:
+    jobs:
+      pkgdown_deploy:
+        docker:
+          - image: node:14
+        steps:
+          - checkout
+          - attach_workspace:
+              at: docs
+          - run:
+              name: disable jekyll
+              command: touch docs/docs/.nojekyll
+          - run:
+              name: install deps
+              command: |
+                npm install -g --silent gh-pages@3.0.0
+                git config user.email "ci-build@roche.com"
+                git config user.name "ci-build"
+          - add_ssh_keys:
+              fingerprints:
+                - "e3:e8:03:cb:2a:09:8f:70:b9:3a:66:f0:e8:ee:4f:59"
+          - run:
+              name: deploys docs
+              command: gh-pages --dotfiles --message "[skip ci] Updates" --dist docs/docs
 
-  roxygen:
-    docker:
-      - image: << pipeline.parameters.docker-image >>
-    steps:
-      - checkout
-      - run:
-          name: "check if manuals are upto date with roxygen comments"
-          command: |
-            R -e "roxygen2::roxygenize('.', roclets = c('rd', 'collate', 'namespace'))"
-            if [[ -z $(git status -s) ]]
-            then
-              echo "manuals are not upto date with roxygen comments"
-              echo "please rerun roxygen2::roxygenize('.', roclets = c('rd', 'collate', 'namespace'))"
-              set -o errexit
-            else
-              echo "manuals are upto date with roxygen comments"
-            fi
-
-  pkgdown_build:
-    docker:
-      - image: << pipeline.parameters.docker-image >>
-    steps:
-      - checkout
-      - run:
-          name: "create pkgdown website"
-          command: R -e 'pkgdown::build_site(".", devel = FALSE)'
-      - store_artifacts:
-          path: ./docs
-          destination: pkgdown
-      - persist_to_workspace:
-          root: ./
-          paths: docs
-
-  pkgdown_deploy:
-    docker:
-      - image: node:14
-    steps:
-      - checkout
-      - attach_workspace:
-          at: docs
-      - run:
-          name: disable jekyll
-          command: touch docs/docs/.nojekyll
-      - run:
-          name: install deps
-          command: |
-            npm install -g --silent gh-pages@3.0.0
-            git config user.email "ci-build@roche.com"
-            git config user.name "ci-build"
-      - add_ssh_keys:
-          fingerprints:
-            - "e3:e8:03:cb:2a:09:8f:70:b9:3a:66:f0:e8:ee:4f:59"
-      - run:
-          name: deploys docs
-          command: gh-pages --dotfiles --message "[skip ci] Updates" --dist docs/docs
 
 workflows:
   version: 2
   Rworkflow:
     jobs:
-      - version_validation
-      - roxygen
-      - pkgdown_build:
+      - validation/version_validation
+      - validation/roxygen
+      - build/pkgdown_build:
           requires:
-            - roxygen
-            - version_validation
-      - build_check_install:
+            - validation/roxygen
+            - validation/version_validation
+      - build/build_check_install:
           requires:
-            - roxygen
-            - version_validation
+            - validation/roxygen
+            - validation/version_validation
           context: poc
       - approve_deploy_pkgdown:
           type: approval
           requires:
-            - pkgdown_build
+            - build/pkgdown_build
           filters:
             branches:
               only: master
-      - pkgdown_deploy:
+      - deploy/pkgdown_deploy:
           requires:
             - approve_deploy_pkgdown
           filters:

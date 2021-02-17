@@ -30,3 +30,6 @@ complexmodel.R
 *.R#
 
 dt_573_MHT01_npaszty.Rmd
+
+# vscode artifacts
+.vscode/*
