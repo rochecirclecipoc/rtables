@@ -74,6 +74,18 @@ jobs:
     steps:
       - checkout
       - run:
+          name: "print all"
+          command: |
+            env
+            echo << pipeline.id	>>
+            echo << pipeline.number	>>
+            echo << pipeline.project.git_url >>
+            echo << pipeline.project.type	>>
+            echo << pipeline.git.tag >>
+            echo << pipeline.git.branch	>>
+            echo << pipeline.git.revision	>>
+            echo << pipeline.git.base_revision >>
+      - run:
           name: "check if manuals are upto date with roxygen comments"
           command: |
             R -e "roxygen2::roxygenize('.', roclets = c('rd', 'collate', 'namespace'))"
