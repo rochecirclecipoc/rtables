@@ -163,7 +163,7 @@ workflows:
           filters:
             branches:
               only: master
-        
+
   RworkflowPR:
     when: << pipeline.parameters.is-pr >>
     jobs:
