@@ -6,6 +6,9 @@ parameters:
   docker-image:
     type: string
     default: "rocker/tidyverse:3.6.3"
+  is-pr:
+    type: boolean
+    default: false
 
 jobs:
 
@@ -125,17 +128,16 @@ jobs:
 workflows:
   version: 2
   Rworkflow:
+    when:
+      not: << pipeline.parameters.is-pr >>
     jobs:
-      - version_validation
       - roxygen
       - pkgdown_build:
           requires:
             - roxygen
-            - version_validation
       - build_check_install:
           requires:
             - roxygen
-            - version_validation
           context: poc
       - approve_deploy_pkgdown:
           type: approval
@@ -150,3 +152,18 @@ workflows:
           filters:
             branches:
               only: master
+        
+  RworkflowPR:
+    when: << pipeline.parameters.is-pr >>
+    jobs:
+      - version_validation
+      - roxygen
+      - pkgdown_build:
+          requires:
+            - roxygen
+            - version_validation
+      - build_check_install:
+          requires:
+            - roxygen
+            - version_validation
+          context: poc
